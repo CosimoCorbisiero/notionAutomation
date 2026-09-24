@@ -1,0 +1,14 @@
+{
+  "name": "notion-task-daily-hours",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Distribuisce 8 ore giornaliere tra i task Notion In progress e Testing.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/sync.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
