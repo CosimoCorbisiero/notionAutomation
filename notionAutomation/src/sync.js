@@ -8,6 +8,8 @@ const DAILY_DATA_SOURCE_ID = process.env.DAILY_DATA_SOURCE_ID || "2b7f510a-d292-
 const MONTHS_DATA_SOURCE_ID = process.env.MONTHS_DATA_SOURCE_ID || "2b7f510a-d292-8038-978f-000be11b1655";
 const TIME_ZONE = process.env.TIME_ZONE || "Europe/Rome";
 const DAILY_HOURS = Number(process.env.DAILY_HOURS || 8);
+const ASSIGNEE_NAME = process.env.NOTION_ASSIGNEE_NAME || "Cosimo Corbisiero";
+const ASSIGNEE_ID = process.env.NOTION_ASSIGNEE_ID || "";
 
 const ACTIVE_STATUSES = new Set(["In progress", "Testing"]);
 const MONTH_NAMES = [
@@ -58,7 +60,18 @@ function taskFromPage(page) {
   const status = property(page.properties, ["Status"], "status")?.status?.name;
   const title = titleText(property(page.properties, ["Task name", "Name"], "title"));
   const projectId = relationIds(property(page.properties, ["Project"], "relation"))[0];
-  return { id: page.id, title: title || page.id, status, projectId };
+  const assigneeProperty =
+    property(page.properties, ["Assignee"], "people") ||
+    property(page.properties, [], "person");
+  const assignees = assigneeProperty?.people || assigneeProperty?.person || [];
+  return { id: page.id, title: title || page.id, status, projectId, assignees };
+}
+
+function isTaskAssignedToConfiguredUser(task) {
+  return task.assignees.some((person) => (
+    (ASSIGNEE_ID && person.id === ASSIGNEE_ID) ||
+    person.name === ASSIGNEE_NAME
+  ));
 }
 
 function dailyEntryFromPage(page) {
@@ -180,12 +193,6 @@ export async function syncToday({ now = new Date() } = {}) {
   const today = localDate(now);
   const [taskPages, dailyPages, monthPage] = await Promise.all([
     queryDataSource(TASKS_DATA_SOURCE_ID, {
-      filter: {
-        or: [
-          { property: "Status", status: { equals: "In progress" } },
-          { property: "Status", status: { equals: "Testing" } },
-        ],
-      },
       page_size: 100,
     }),
     queryDataSource(DAILY_DATA_SOURCE_ID, {
@@ -195,9 +202,11 @@ export async function syncToday({ now = new Date() } = {}) {
     findCurrentMonth(),
   ]);
 
-  const activeTasks = taskPages
+  const scopedTasks = taskPages
     .map(taskFromPage)
-    .filter((task) => ACTIVE_STATUSES.has(task.status));
+    .filter(isTaskAssignedToConfiguredUser);
+  const activeTasks = scopedTasks.filter((task) => ACTIVE_STATUSES.has(task.status));
+  const scopedTaskIds = new Set(scopedTasks.map((task) => task.id));
   const entriesByTask = new Map();
   const dailyEntries = dailyPages.map(dailyEntryFromPage);
   for (const page of dailyEntries) {
@@ -209,7 +218,9 @@ export async function syncToday({ now = new Date() } = {}) {
 
   // The 8-hour budget is shared by every task in today's diary, including
   // tasks that were completed earlier today.
-  const totalHoursBefore = dailyEntries.reduce((sum, entry) => sum + entry.hours, 0);
+  const totalHoursBefore = dailyEntries
+    .filter((entry) => entry.taskId && scopedTaskIds.has(entry.taskId))
+    .reduce((sum, entry) => sum + entry.hours, 0);
   const remainingHours = Math.max(0, DAILY_HOURS - totalHoursBefore);
   const selectedTasks = chooseTasksForIncrement(activeTasks, remainingHours);
   const selectedTaskIds = new Set(selectedTasks.map((task) => task.id));
