@@ -63,13 +63,29 @@ function taskFromPage(page) {
 
 function dailyEntryFromPage(page) {
   const taskId = relationIds(property(page.properties, ["Task"], "relation"))[0];
-  return { id: page.id, taskId };
+  const hours = property(page.properties, ["Ore Lavorate"], "number")?.number ?? 0;
+  return { id: page.id, taskId, hours: Number(hours) || 0 };
 }
 
 function hoursPerTask(taskCount, totalHours = DAILY_HOURS) {
   if (taskCount <= 0) return 0;
-  // Keep the mathematical quotient; Notion supports decimal number properties.
   return totalHours / taskCount;
+}
+
+function shuffled(items, random = Math.random) {
+  const result = [...items];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const other = Math.floor(random() * (index + 1));
+    [result[index], result[other]] = [result[other], result[index]];
+  }
+  return result;
+}
+
+function chooseTasksForIncrement(tasks, remainingHours, random = Math.random) {
+  // One whole hour is assigned to each selected task. If fewer hours remain
+  // than active tasks, the selected tasks are chosen randomly.
+  const incrementCount = Math.min(tasks.length, Math.max(0, Math.floor(remainingHours)));
+  return shuffled(tasks, random).slice(0, incrementCount);
 }
 
 async function notion(path, options = {}) {
@@ -182,26 +198,36 @@ export async function syncToday({ now = new Date() } = {}) {
   const activeTasks = taskPages
     .map(taskFromPage)
     .filter((task) => ACTIVE_STATUSES.has(task.status));
-  const hours = hoursPerTask(activeTasks.length);
   const entriesByTask = new Map();
-  for (const page of dailyPages.map(dailyEntryFromPage)) {
+  const dailyEntries = dailyPages.map(dailyEntryFromPage);
+  for (const page of dailyEntries) {
     if (!page.taskId) continue;
     const entries = entriesByTask.get(page.taskId) || [];
     entries.push(page);
     entriesByTask.set(page.taskId, entries);
   }
 
+  // The 8-hour budget is shared by every task in today's diary, including
+  // tasks that were completed earlier today.
+  const totalHoursBefore = dailyEntries.reduce((sum, entry) => sum + entry.hours, 0);
+  const remainingHours = Math.max(0, DAILY_HOURS - totalHoursBefore);
+  const selectedTasks = chooseTasksForIncrement(activeTasks, remainingHours);
+  const selectedTaskIds = new Set(selectedTasks.map((task) => task.id));
+
   let created = 0;
   let updated = 0;
   for (const task of activeTasks) {
+    if (!selectedTaskIds.has(task.id)) continue;
     const existing = entriesByTask.get(task.id) || [];
+    const currentHours = existing.reduce((sum, entry) => sum + entry.hours, 0);
+    const nextHours = currentHours + 1;
     if (existing.length === 0) {
-      await createDailyEntry(task, today, hours, monthPage.id);
+      await createDailyEntry(task, today, nextHours, monthPage.id);
       created += 1;
       continue;
     }
     for (const entry of existing) {
-      await updateDailyEntry(entry.id, task, today, hours, monthPage.id);
+      await updateDailyEntry(entry.id, task, today, nextHours, monthPage.id);
       updated += 1;
     }
   }
@@ -209,7 +235,9 @@ export async function syncToday({ now = new Date() } = {}) {
   return {
     today,
     activeTasks: activeTasks.length,
-    hoursPerTask: hours,
+    totalHoursBefore,
+    allocatedThisRun: selectedTasks.length,
+    totalHoursAfter: totalHoursBefore + selectedTasks.length,
     created,
     updated,
     existingDailyRows: dailyPages.length,
@@ -227,4 +255,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     });
 }
 
-export { hoursPerTask, localDate, taskFromPage };
+export { chooseTasksForIncrement, hoursPerTask, localDate, taskFromPage };
