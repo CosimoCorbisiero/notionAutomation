@@ -82,6 +82,11 @@ function dailyEntryFromPage(page) {
   return { id: page.id, taskId, hours: Number(hours) || 0 };
 }
 
+function hoursPerTask(taskCount, totalHours = DAILY_HOURS) {
+  if (taskCount <= 0) return 0;
+  return totalHours / taskCount;
+}
+
 async function notion(path, options = {}) {
   const response = await fetch(`${NOTION_API}${path}`, {
     ...options,
@@ -218,7 +223,7 @@ export async function syncToday({ now = new Date() } = {}) {
 
   // Per questa esecuzione oraria alloca al massimo 1 ora totale, ma non più delle ore giornaliere rimanenti
   const hourToAllocate = Math.min(1, remainingHoursInDay);
-  const hoursPerTask = hourToAllocate / activeTasks.length;
+  const perTaskHours = hoursPerTask(activeTasks.length, hourToAllocate);
 
   let created = 0;
   let updated = 0;
@@ -228,12 +233,12 @@ export async function syncToday({ now = new Date() } = {}) {
     
     if (existing.length === 0) {
       // Nessuna voce per oggi: crea nuova riga
-      await createDailyEntry(task, today, hoursPerTask, monthPage.id);
+      await createDailyEntry(task, today, perTaskHours, monthPage.id);
       created += 1;
     } else {
       // Riga esistente: aggiungi la frazione di ora lavorata in questo turno
       const mainEntry = existing[0];
-      const newTotalHours = mainEntry.hours + hoursPerTask;
+      const newTotalHours = mainEntry.hours + perTaskHours;
       await updateDailyEntry(mainEntry.id, task, today, newTotalHours, monthPage.id);
       updated += 1;
     }
@@ -242,7 +247,7 @@ export async function syncToday({ now = new Date() } = {}) {
   return {
     today,
     activeTasks: activeTasks.length,
-    hoursAddedPerTask: Number(hoursPerTask.toFixed(2)),
+    hoursAddedPerTask: Number(perTaskHours.toFixed(2)),
     totalHoursBefore: Number(totalHoursBefore.toFixed(2)),
     allocatedThisRun: Number(hourToAllocate.toFixed(2)),
     totalHoursAfter: Number((totalHoursBefore + hourToAllocate).toFixed(2)),
@@ -262,4 +267,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     });
 }
 
-export { localDate, taskFromPage };
+export { hoursPerTask, localDate, taskFromPage };
